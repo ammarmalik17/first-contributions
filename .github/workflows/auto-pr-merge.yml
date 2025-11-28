@@ -55,10 +55,111 @@ jobs:
             echo "one_line_change=false" >> $GITHUB_ENV
           fi
 
+      # Check for duplicate contributors before merging
+      - name: Check for duplicate contributors
+        if: env.only_contributors == 'true' && env.one_line_change == 'true'
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // Get the diff of the PR to extract the added line
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+
+            // Find the Contributors.md file in the PR
+            const contribFile = files.find(file => file.filename === 'Contributors.md');
+            if (!contribFile) {
+              console.log('Contributors.md file not found in PR');
+              return;
+            }
+
+            // Get the patch (diff) content
+            const patch = contribFile.patch;
+            
+            // Extract the added line (lines starting with + but not +++ which is diff header)
+            const addedLines = patch.split('\n').filter(line => line.startsWith('+') && !line.startsWith('+++'));
+            if (addedLines.length === 0) {
+              console.log('No added lines found');
+              return;
+            }
+
+            // Remove the + prefix from the line
+            const newEntry = addedLines[0].substring(1);
+            console.log(`New entry: ${newEntry}`);
+
+            // Extract GitHub username from the new entry using regex
+            const githubUrlRegex = /https:\/\/github\.com\/([^\/)\s]+)/;
+            const githubMatch = newEntry.match(githubUrlRegex);
+            
+            if (!githubMatch) {
+              console.log('No GitHub URL found in new entry');
+              // Set environment variable indicating no duplicate check needed
+              echo "duplicate_check_not_required=true" >> $GITHUB_ENV;
+              return;
+            }
+
+            const newUsername = githubMatch[1].toLowerCase().trim();
+            console.log(`New username: ${newUsername}`);
+
+            // Get the current content of Contributors.md
+            const { data: fileContent } = await github.rest.repos.getContent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path: 'Contributors.md',
+              ref: 'main' // Check against main branch
+            });
+
+            // Decode the content from base64
+            const content = Buffer.from(fileContent.content, 'base64').toString('utf-8');
+            
+            // Split content into lines
+            const lines = content.split('\n');
+            
+            // Check each line for the same GitHub username
+            let duplicateFound = false;
+            for (const line of lines) {
+              const existingMatch = line.match(githubUrlRegex);
+              if (existingMatch) {
+                const existingUsername = existingMatch[1].toLowerCase().trim();
+                if (existingUsername === newUsername) {
+                  duplicateFound = true;
+                  break;
+                }
+              }
+            }
+
+            if (duplicateFound) {
+              console.log('Duplicate contributor found');
+              // Set environment variable indicating duplicate found
+              echo "duplicate_found=true" >> $GITHUB_ENV;
+              
+              // Post a comment explaining the duplicate
+              const duplicateComment = `Hello @${context.payload.pull_request.user.login}, thank you for your contribution! 🎉
+
+However, we noticed that your entry appears to be a duplicate. The GitHub username \`${newUsername}\` is already listed in our Contributors.md file.
+
+No worries! If you believe this is an error or if you're trying to update your existing entry, please feel free to reach out or make the necessary adjustments.
+
+Thanks again for your interest in contributing to open source!`;
+              
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: duplicateComment
+              });
+            } else {
+              console.log('No duplicate found');
+              echo "duplicate_found=false" >> $GITHUB_ENV;
+            }
+
       # Merge the pull request if it only modifies the Contributors.md file or if it fail to do then drop failure message as post 
       - name: Merge PR
         id: merge_pr
-        if: env.only_contributors == 'true' && env.one_line_change == 'true'
+        if: env.only_contributors == 'true' && env.one_line_change == 'true' && env.duplicate_found != 'true'
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -116,12 +217,29 @@ jobs:
                   const greeting = `Hello @${username}, congratulations! You've successfully submitted a pull request. 🎉`;
                   const starRepoMessage = `If you liked the tutorial, please star this repo by clicking the star button on the top right of this page. <img alt="star screenshot" title="star button" src="https://firstcontributions.github.io/assets/star.png">`;
                   
-                  const nextSteps = `# Next steps \n - Continue contributing: If you're looking for projects to contribute to, checkout our [<img src="${repo_logo}" width="22" title="web app" /> webapp](${web_url}). \n - If you want more practice checkout [code contributions](${codeContributionsLink}). \n - Share on social media: You can share this content to help more people.\n   - [<img alt="bluesky" title="bluesky" src="${bluesky_logo}" width="22"> Post on Bluesky](${bluesky_share_link}).\n   - [<img alt="facebook" title="facebook" src="${fb_logo}" width="22"> share](${fb_share_link}).\n   - [ <img alt="reddit" title="reddit" src="${reddit_logo}" width="22"> share](${reddit_link}).\n   - [<img alt="linkedin" title="linkedin" src="${linkedin_logo}" width="22"> post](${linkedin_share_link}).\n   - [<img alt="devio" title="devio" src="${dev_logo}" width="22"> publish](${dev_share_link}).\n   - [<img src="${hackernews_logo}" width="22" title="HackerNews" /> Post on HackerNews](${hackernews_share_link}).`;
+                  const nextSteps = `# Next steps 
+ - Continue contributing: If you're looking for projects to contribute to, checkout our [<img src="${repo_logo}" width="22" title="web app" /> webapp](${web_url}). 
+ - If you want more practice checkout [code contributions](${codeContributionsLink}). 
+ - Share on social media: You can share this content to help more people.
+   - [<img alt="bluesky" title="bluesky" src="${bluesky_logo}" width="22"> Post on Bluesky](${bluesky_share_link}).
+   - [<img alt="facebook" title="facebook" src="${fb_logo}" width="22"> share](${fb_share_link}).
+   - [ <img alt="reddit" title="reddit" src="${reddit_logo}" width="22"> share](${reddit_link}).
+   - [<img alt="linkedin" title="linkedin" src="${linkedin_logo}" width="22"> post](${linkedin_share_link}).
+   - [<img alt="devio" title="devio" src="${dev_logo}" width="22"> publish](${dev_share_link}).
+   - [<img src="${hackernews_logo}" width="22" title="HackerNews" /> Post on HackerNews](${hackernews_share_link}).`;
                   const feedbackMessage = `We'd love to hear your thoughts about this project. Let us know how we can improve by commenting or opening an issue here.`;
                   
                   const gif = `![celebration gif](${getRandomGif()})`;
 
-                  return `${greeting}\n\n${starRepoMessage}\n\n${nextSteps}\n\n${feedbackMessage}\n\n${gif}`;
+                  return `${greeting}
+
+${starRepoMessage}
+
+${nextSteps}
+
+${feedbackMessage}
+
+${gif}`;
                 }
 
                 // Generate the merge message using the getMergeMessage function
@@ -194,7 +312,12 @@ jobs:
             // find any comment already made by the bot.                                                                                                    
             const botComment = comments.find(comment => comment.user.login === 'github-actions[bot]')                                                                       
 
-            const body = `Thank you for your pull request. This pull request contains changes in files which requires review. The following files were changed:\n\n  ${process.env.files_changed.trim() ? `\n\n${process.env.files_changed.trim().split(' ').map(file => `- ${file}`).join('\n')}` : ''}`
+            const body = `Thank you for your pull request. This pull request contains changes in files which requires review. The following files were changed:
+
+  ${process.env.files_changed.trim() ? `
+
+${process.env.files_changed.trim().split(' ').map(file => `- ${file}`).join('
+')}` : ''}`
 
             if (botComment) {
               await github.rest.issues.updateComment({
