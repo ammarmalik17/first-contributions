@@ -137,7 +137,7 @@ jobs:
               echo "duplicate_found=true" >> $GITHUB_ENV;
               
               // Post a comment explaining the duplicate
-              const duplicateComment = `Hello @${context.payload.pull_request.user.login}, thank you for your contribution! 🎉
+              const duplicateComment = `Hello @${context.payload.pull_request.user.login}, thank you for your contribution!
 
 However, we noticed that your entry appears to be a duplicate. The GitHub username \`${newUsername}\` is already listed in our Contributors.md file.
 
